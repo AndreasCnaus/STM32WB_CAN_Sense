@@ -1,1 +1,3 @@
-# STM32WB_CAN_Sense (**Work in progress**)
+# STM32WB_CAN_Sense Project
+**Work in progress**
+
