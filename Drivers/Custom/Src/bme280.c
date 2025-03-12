@@ -5,7 +5,7 @@
  *      Author: Andreas Cnaus
  */
 
-#include "BME280.h"
+#include <bme280.h>
 
 // Temperature compensation parameters
 uint16_t dig_T1;
