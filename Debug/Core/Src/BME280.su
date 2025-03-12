@@ -1,8 +1,0 @@
-../Core/Src/BME280.c:43:16:BME280_init	96	dynamic
-../Core/Src/BME280.c:149:16:BME280_read_env_data	56	dynamic
-../Core/Src/BME280.c:184:14:BME280_compensate_P_int64	328	static
-../Core/Src/BME280.c:212:14:BME280_compensate_T_int32	32	static
-../Core/Src/BME280.c:228:14:BME280_compensate_H_int32	24	static
-../Core/Src/BME280.c:252:19:BME280_read_register	40	static
-../Core/Src/BME280.c:266:19:BME280_read_registers	40	static
-../Core/Src/BME280.c:279:19:BME280_write_register	40	static
