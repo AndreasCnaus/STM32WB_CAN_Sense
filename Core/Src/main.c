@@ -123,6 +123,7 @@ int main(void)
   // Configure the MCP2515 hardware
   u8 opmode = 0x00;
   mcp2515_reset_hw(&hspi1);
+  mcp2515_config_hw(&hspi1);
   mcp2515_set_opmode(&hspi1, MCP2515_LOOPBACK_MODE);
   mcp2515_get_opmode(&hspi1, &opmode);
   LOG_INFO("Device is in %s", get_opmode_string(opmode));

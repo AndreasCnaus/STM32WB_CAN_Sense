@@ -326,6 +326,7 @@ extern const char *opmode_strings[];
 
 // Type Definitions
 typedef uint8_t u8;
+typedef uint32_t u32;
 
 // Function Declarations
 HAL_StatusTypeDef mcp2515_write_reg(SPI_HandleTypeDef *hspi, u8 reg, u8 value);
