@@ -128,6 +128,13 @@ int main(void)
   mcp2515_get_opmode(&hspi1, &opmode);
   LOG_INFO("Device is in %s", get_opmode_string(opmode));
 
+  // Create and send test message
+  u16 msg_sid = 25;
+  char msg[] = "Test1";
+  u8 msg_len = (u8)strlen(msg);
+  mcp2515_write_can_frame(&hspi1, msg_sid,(u8 *)msg, msg_len);
+
+
   /* USER CODE END 2 */
 
   /* Infinite loop */
@@ -389,8 +396,8 @@ static void MX_GPIO_Init(void)
 
   /*Configure GPIO pin : MCP2515_INT_Pin */
   GPIO_InitStruct.Pin = MCP2515_INT_Pin;
-  GPIO_InitStruct.Mode = GPIO_MODE_IT_RISING;
-  GPIO_InitStruct.Pull = GPIO_NOPULL;
+  GPIO_InitStruct.Mode = GPIO_MODE_IT_FALLING;
+  GPIO_InitStruct.Pull = GPIO_PULLUP;
   HAL_GPIO_Init(MCP2515_INT_GPIO_Port, &GPIO_InitStruct);
 
   /*Configure GPIO pins : SPI1_NSS_Pin ERROR_INDICATOR_Pin */
@@ -399,6 +406,10 @@ static void MX_GPIO_Init(void)
   GPIO_InitStruct.Pull = GPIO_NOPULL;
   GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
   HAL_GPIO_Init(GPIOA, &GPIO_InitStruct);
+
+  /* EXTI interrupt init*/
+  HAL_NVIC_SetPriority(EXTI3_IRQn, 2, 0);
+  HAL_NVIC_EnableIRQ(EXTI3_IRQn);
 
 /* USER CODE BEGIN MX_GPIO_Init_2 */
 /* USER CODE END MX_GPIO_Init_2 */
@@ -414,6 +425,15 @@ void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim)
 	{
 		tim16_flag = 1;
 	}
+}
+
+void HAL_GPIO_EXTI_Callback(uint16_t GPIO_Pin)
+{
+    if (GPIO_Pin == MCP2515_INT_Pin) {
+        // Handle the interrupt for MCP2515_INT_Pin
+        // Example: Notify a task, set a flag, or process data
+        LOG_INFO("MCP2515 interrupt triggered!");
+    }
 }
 
 // Redirect printf to ITM (Instrumentation Trace Macrocell)

@@ -164,7 +164,7 @@ HAL_StatusTypeDef mcp2515_set_opmode(SPI_HandleTypeDef *hspi, u8 mode)
  * @param  hspi  Pointer to the SPI handle structure used for SPI communication.
  * @param  mode  Pointer to a variable where the current operating mode will be stored (OPMOD[2:0]).
  *
- * @retval HAL_StatusTypeDef Status of the operation (HAL_OK on success, HAL_ERROR on failure).
+ * @retval HAL_StatusTypeDef Status of the operation (HAL_OK on success).
  */
 HAL_StatusTypeDef mcp2515_get_opmode(SPI_HandleTypeDef *hspi, u8 *mode)
 {
@@ -230,7 +230,7 @@ HAL_StatusTypeDef mcp2515_reset_hw(SPI_HandleTypeDef *hspi)
  *
  * @param  hspi  Pointer to the SPI handle structure used for SPI communication.
  *
- * @retval HAL_StatusTypeDef Status of the operation (HAL_OK on success, HAL_ERROR on failure).
+ * @retval HAL_StatusTypeDef Status of the operation (HAL_OK on success).
  */
 HAL_StatusTypeDef mcp2515_config_hw(SPI_HandleTypeDef *hspi)
 {
@@ -258,7 +258,7 @@ HAL_StatusTypeDef mcp2515_config_hw(SPI_HandleTypeDef *hspi)
     // Set CAN-Control register to 0x00 (reset state)
     status = mcp2515_write_reg(hspi, MCP2515_CANCTRL, 0x00);
     if (status != HAL_OK) {
-        LOG_ERROR("Failed to initialize CAN-Control register (status: %d)\n", status);
+        LOG_ERROR("Failed to initialize CAN-Control register (status: %d)", status);
         return status;
     }
 
@@ -300,6 +300,133 @@ HAL_StatusTypeDef mcp2515_config_hw(SPI_HandleTypeDef *hspi)
 
     LOG_INFO("The MCP2515 device has been configured successfully.");
     return HAL_OK;	// Return success status
+}
+
+/**
+ * @brief  Sets the TX buffer 2 identifier (standard 11-bit CAN ID) on the MCP2515.
+ *
+ * @param  hspi  Pointer to the SPI handle structure used for SPI communication.
+ * @param  id    The 11-bit CAN identifier to set for TX buffer 2.
+ *
+ * @retval HAL_StatusTypeDef Status of the operation (HAL_OK on success).
+ */
+HAL_StatusTypeDef mcp2515_set_tx2_sid(SPI_HandleTypeDef *hspi, u16 id)
+{
+    HAL_StatusTypeDef status = HAL_OK;
+
+    // Validate the 11-bit CAN ID
+    if (id > 0x7FF) {
+        LOG_ERROR("Invalid CAN ID: 0x%X. Must be 11 bits", id);
+        return HAL_ERROR;
+    }
+
+    // Standard Identifier (SID) consists of 11 bits: split into 8 higher and 3 lower bits
+    u8 sidl, sidh;
+
+    // Split the ID: lower 3 bits to SIDL (properly shifted), upper 8 bits to SIDH
+    sidl = (u8)((id & 0x07) << MCP2515_TXB_SIDL_O);  // Mask and shift lower 3 bits
+    sidh = (u8)(id >> 3);                            // Shift higher 8 bits
+
+    // Write SIDL register (lower 3 bits)
+    status = mcp2515_write_reg(hspi, MCP2515_TXB2SIDL, sidl);
+    if (status != HAL_OK) {
+        LOG_ERROR("Failed to write SIDL register for TXB2 (ID: 0x%X, status: %d)", id, status);
+        return status;
+    }
+
+    // Write SIDH register (upper 8 bits)
+    status = mcp2515_write_reg(hspi, MCP2515_TXB2SIDH, sidh);
+    if (status != HAL_OK) {
+        LOG_ERROR("Failed to write SIDH register for TXB2 (ID: 0x%X, status: %d)", id, status);
+        return status;
+    }
+
+    return HAL_OK;	// Return success status
+}
+
+/**
+ * @brief  Sets the TX buffer 2 data payload on the MCP2515.
+ *
+ * @param  hspi  Pointer to the SPI handle structure used for SPI communication.
+ * @param  data  Pointer to the data array to transmit.
+ * @param  len   Length of the data array (max: MCP2515_MAXDL).
+ *
+ * @retval HAL_StatusTypeDef Status of the operation (HAL_OK on success).
+ */
+HAL_StatusTypeDef mcp2515_set_tx2_data(SPI_HandleTypeDef *hspi, const u8 *data, u8 len)
+{
+    HAL_StatusTypeDef status = HAL_OK;
+
+    // Limit the data length to the maximum allowed value
+    u8 dlc = (len < (u8)MCP2515_MAXDL) ? len : (u8)MCP2515_MAXDL;
+    dlc = (dlc & MCP2515_TXB_DLC_M);  // Mask DLC to ensure proper format
+
+    // Set the data length code (DLC) register
+    status = mcp2515_write_reg(hspi, MCP2515_TXB2DLC, dlc);
+    if (status != HAL_OK) {
+        LOG_ERROR("Failed to set the data length code (len: %d, status: %d)", len, status);
+        return status;
+    }
+
+    // Write the data bytes to the transmit buffer
+    for (int i = 0; i < dlc; i++) {
+        status = mcp2515_write_reg(hspi, MCP2515_TXB2D0 + i, data[i]);
+        if (status != HAL_OK) {
+            LOG_ERROR("Failed to write data byte(%d) to the transmit buffer 2 (status: %d, len: %d)", i, status, len);
+            return status;
+        }
+    }
+
+    return HAL_OK;	// Return success status
+}
+
+/**
+ * @brief  Transmit a low-priority CAN message using transmit buffer 2.
+ *
+ * @param  hspi  Pointer to the SPI handle structure used for SPI communication.
+ * @param  id    CAN identifier (11-bit standard ID).
+ * @param  data  Pointer to the data array to transmit.
+ * @param  len   Length of the data array (max: MCP2515_MAXDL).
+ *
+ * @retval HAL_StatusTypeDef Status of the operation (HAL_OK on success, or other HAL error codes).
+ */
+HAL_StatusTypeDef mcp2515_write_can_frame(SPI_HandleTypeDef *hspi, u16 id, const u8 *data, u8 len)
+{
+    HAL_StatusTypeDef status = HAL_OK;
+    u8 txb2ctrl = 0;
+
+    // Validate input parameters
+    if (hspi == NULL || data == NULL) {
+        LOG_ERROR("Invalid SPI handle or data pointer provided\n");
+        return HAL_ERROR;
+    }
+
+    // Configure the TXB2CTRL register: Set TXREQ and low priority
+    txb2ctrl |= MCP2515_TXB_TXREQ;  // Set transmit request
+    txb2ctrl |= MCP2515_TXP_L_PRIO; // Set message priority to low
+
+    // Set the message standard ID (SID)
+    status = mcp2515_set_tx2_sid(hspi, id);
+    if (status != HAL_OK) {
+        LOG_ERROR("Failed to set Message SID (status: %d)\n", status);
+        return status;
+    }
+
+    // Set the message data
+    status = mcp2515_set_tx2_data(hspi, data, len);
+    if (status != HAL_OK) {
+        LOG_ERROR("Failed to set Message data (status: %d)\n", status);
+        return status;
+    }
+
+    // Initiate message transmission
+    status = mcp2515_write_reg(hspi, MCP2515_TXB2CTRL, txb2ctrl);
+    if (status != HAL_OK) {
+        LOG_ERROR("Failed to initiate message transmission on TX buffer 2 (status: %d)\n", status);
+        return status;
+    }
+
+    return HAL_OK; // Return success status
 }
 
 size_t get_opmode_strings_len(void) {

@@ -321,11 +321,14 @@
 #define MCP2515_RTS_TXB2        0x84 // Request-to-Send TX Buffer 2
 #define MCP2515_RTS_ALL         0x87 // Request-to-Send All TX Buffers (0, 1, and 2)
 
+#define MCP2515_MAXDL 8     		 // Maximum Data Length for CAN messages
+
 // Mappings
 extern const char *opmode_strings[];
 
 // Type Definitions
-typedef uint8_t u8;
+typedef uint8_t  u8;
+typedef uint16_t u16;
 typedef uint32_t u32;
 
 // Function Declarations
@@ -337,6 +340,14 @@ HAL_StatusTypeDef mcp2515_set_opmode(SPI_HandleTypeDef *hspi, u8 mode);
 HAL_StatusTypeDef mcp2515_get_opmode(SPI_HandleTypeDef *hspi, u8 *mode);
 HAL_StatusTypeDef mcp2515_reset_hw(SPI_HandleTypeDef *hspi);
 HAL_StatusTypeDef mcp2515_config_hw(SPI_HandleTypeDef *hspi);
+
+HAL_StatusTypeDef mcp2515_set_tx2_sid(SPI_HandleTypeDef *hspi, u16 id);                                 // Set the standard indentifier for the transmit buffer 2
+HAL_StatusTypeDef mcp2515_set_tx2_data(SPI_HandleTypeDef *hspi, const u8 *data, u8 len);                // Set the message data for the transmit buffer 2
+HAL_StatusTypeDef mcp2515_write_can_frame(SPI_HandleTypeDef *hspi, u16 id, const u8 *data, u8 len);     // Transmit the CAN messsage over the transmit buffer 2
+
+int mcp2515_handle_merrf(SPI_HandleTypeDef *hspi);
+int mcp2515_handle_errif(SPI_HandleTypeDef *hspi);
+int mcp2515_handle_tx2if(SPI_HandleTypeDef *hspi);
 
 size_t get_opmode_strings_len(void);
 const char* get_opmode_string(u8 mode);
