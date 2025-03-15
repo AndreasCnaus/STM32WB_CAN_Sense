@@ -9,6 +9,20 @@ const char *mode_strings[] = {
     "Configuration mode"      // 0x04
 };
 
+// interrupt handler lookup table
+struct mcp2515_irq_entry irq_table[] = {
+    { MCP2515_MERRF, mcp2515_handle_merrf },
+    { MCP2515_ERRIF, mcp2515_handle_errif },
+    { MCP2515_TX2IF, mcp2515_handle_tx2if },
+    { MCP2515_RX1IF, mcp2515_handle_rx1if },
+    { MCP2515_RX0IF, mcp2515_handle_rx0if },
+};
+
+// Define the size of the irq_table
+const size_t IRQ_TABLE_SIZE = sizeof(irq_table) / sizeof(irq_table[0]);
+
+static u8 tx2_buffer_ready = 0;	// Indicates whether transmit buffer 2 is empty and ready for new data.
+
 /**
  * @brief  Writes a value to a specific register of the MCP2515 via SPI.
  *
@@ -99,7 +113,7 @@ HAL_StatusTypeDef mcp2515_write_bit(SPI_HandleTypeDef *hspi, u8 reg, u8 mask, u8
     HAL_GPIO_WritePin(GPIOA, GPIO_PIN_4, GPIO_PIN_RESET);
 
     // Perform SPI transmission: Send the command and data to the MCP2515
-    status = HAL_SPI_Transmit(hspi, tx_buf, sizeof(tx_buf), HAL_MAX_DELAY);
+    status = HAL_SPI_Transmit(hspi, tx_buf, 4, HAL_MAX_DELAY);
 
     // Pull NSS (CS) High to end communication
     HAL_GPIO_WritePin(GPIOA, GPIO_PIN_4, GPIO_PIN_SET);
@@ -220,6 +234,8 @@ HAL_StatusTypeDef mcp2515_reset_hw(SPI_HandleTypeDef *hspi)
         return HAL_ERROR;
     }
 
+    tx2_buffer_ready = 1; // After reset, the transmit buffer is ready to accept new data.
+
     // LOG_INFO("MCP2515 successfully reset and is in Configuration Mode.");
     return HAL_OK;  // Return success status
 }
@@ -291,7 +307,7 @@ HAL_StatusTypeDef mcp2515_config_hw(SPI_HandleTypeDef *hspi)
     LOG_INFO("Calculated baud rate: %d bps", baudrate);
 
     // Enable interrupts via CANINTE register
-    caninte = 0xFF;  // Enable all interrupts
+    caninte = 0xB0;  // Enable (Message error, Error,  Transmit buffer 2 empty) interrupt flags
     status = mcp2515_write_reg(hspi, MCP2515_CANINTE, caninte);
     if (status != HAL_OK) {
         LOG_ERROR("Failed to set interrupt enable register (status: %d)", status);
@@ -401,6 +417,8 @@ HAL_StatusTypeDef mcp2515_write_can_frame(SPI_HandleTypeDef *hspi, u16 id, const
         return HAL_ERROR;
     }
 
+    tx2_buffer_ready = 0; // Transmit buffer is busy
+
     // Configure the TXB2CTRL register: Set TXREQ and low priority
     txb2ctrl |= MCP2515_TXB_TXREQ;  // Set transmit request
     txb2ctrl |= MCP2515_TXP_L_PRIO; // Set message priority to low
@@ -429,6 +447,121 @@ HAL_StatusTypeDef mcp2515_write_can_frame(SPI_HandleTypeDef *hspi, u16 id, const
     return HAL_OK; // Return success status
 }
 
+/**
+ * @brief  Handle the MCP2515 Message Error (MERRF) interrupt.
+ *
+ * @param  hspi Pointer to the SPI handle used for communication with MCP2515.
+ * @retval HAL_StatusTypeDef Status of the operation (HAL_OK on success).
+ */
+HAL_StatusTypeDef mcp2515_handle_merrf(SPI_HandleTypeDef *hspi)
+{
+    HAL_StatusTypeDef status = HAL_OK;
+
+    LOG_WARN("Message error interrupt occurred");
+
+    // Clear the MERRF flag in the CANINTF register
+    status = mcp2515_write_bit(hspi, MCP2515_CANINTF, MCP2515_MERRF, 0x0);
+    if (status != HAL_OK) {
+        LOG_ERROR("Failed to clear MERRF flag (status: %d)", status);
+    }
+
+    return status;
+}
+
+/**
+ * @brief  Handle the MCP2515 Error (ERRIF) interrupt.
+ *
+ * @param  hspi Pointer to the SPI handle used for communication with MCP2515.
+ * @retval HAL_StatusTypeDef Status of the operation (HAL_OK on success).
+ */
+HAL_StatusTypeDef mcp2515_handle_errif(SPI_HandleTypeDef *hspi)
+{
+    HAL_StatusTypeDef status = HAL_OK;
+
+    LOG_WARN("Error interrupt occurred");
+
+    // Clear the ERRIF flag in the CANINTF register
+    status = mcp2515_write_bit(hspi, MCP2515_CANINTF, MCP2515_ERRIF, 0x0);
+    if (status != HAL_OK) {
+        LOG_ERROR("Failed to clear ERRIF flag (status: %d)", status);
+    }
+
+    return status;
+}
+
+/**
+ * @brief  Handle the MCP2515 Transmit Buffer 2 (TX2IF) interrupt.
+ *
+ * @param  hspi Pointer to the SPI handle used for communication with MCP2515.
+ * @retval HAL_StatusTypeDef Status of the operation (HAL_OK on success).
+ */
+HAL_StatusTypeDef mcp2515_handle_tx2if(SPI_HandleTypeDef *hspi)
+{
+    HAL_StatusTypeDef status = HAL_OK;
+
+    LOG_INFO("TX2 interrupt occurred");
+
+    // Clear the TX2IF flag in the CANINTF register
+    status = mcp2515_write_bit(hspi, MCP2515_CANINTF, MCP2515_TX2IF, 0x0);
+    if (status != HAL_OK) {
+        LOG_ERROR("Failed to clear TX2IF flag (status: %d)", status);
+    }
+
+    tx2_buffer_ready = 1;	// Transmit buffer is ready to accept new data
+
+    return status;
+}
+
+/**
+ * @brief Handle the MCP2515 Receive Buffer 0 (RX0IF) interrupt.
+ *
+ * @param hspi Pointer to the SPI handle used for communication with MCP2515.
+ * @retval HAL_StatusTypeDef Status of the operation (HAL_OK on success).
+ */
+HAL_StatusTypeDef mcp2515_handle_rx0if(SPI_HandleTypeDef *hspi)
+{
+    HAL_StatusTypeDef status = HAL_OK;
+
+    LOG_INFO("RX0 interrupt occurred");
+
+    // Clear the RX0IF flag in the CANINTF register
+    status = mcp2515_write_bit(hspi, MCP2515_CANINTF, MCP2515_RX0IF, 0x0);
+    if (status != HAL_OK) {
+        LOG_ERROR("Failed to clear RX0IF flag (status: %d)", status);
+        return status;
+    }
+
+    return status;
+}
+
+/**
+ * @brief Handle the MCP2515 Receive Buffer 1 (RX1IF) interrupt.
+ *
+ * @param hspi Pointer to the SPI handle used for communication with MCP2515.
+ * @retval HAL_StatusTypeDef Status of the operation (HAL_OK on success).
+ */
+HAL_StatusTypeDef mcp2515_handle_rx1if(SPI_HandleTypeDef *hspi)
+{
+    HAL_StatusTypeDef status = HAL_OK;
+
+    LOG_INFO("RX1 interrupt occurred");
+
+    // Clear the RX1IF flag in the CANINTF register
+    status = mcp2515_write_bit(hspi, MCP2515_CANINTF, MCP2515_RX1IF, 0x0);
+    if (status != HAL_OK) {
+        LOG_ERROR("Failed to clear RX1IF flag (status: %d)", status);
+        return status;
+    }
+
+    return status;
+}
+
+
+u8 is_tx2_buf_ready()
+{
+	return tx2_buffer_ready;
+}
+
 size_t get_opmode_strings_len(void) {
     return sizeof(mode_strings) / sizeof(mode_strings[0]);
 }
@@ -440,5 +573,7 @@ const char* get_opmode_string(u8 mode) {
         return "Invalid operation mode";
     }
 }
+
+
 
 

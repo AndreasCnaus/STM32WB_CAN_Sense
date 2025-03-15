@@ -323,13 +323,23 @@
 
 #define MCP2515_MAXDL 8     		 // Maximum Data Length for CAN messages
 
-// Mappings
-extern const char *opmode_strings[];
-
 // Type Definitions
 typedef uint8_t  u8;
 typedef uint16_t u16;
 typedef uint32_t u32;
+
+typedef HAL_StatusTypeDef (*mcp2515_irq_handler_t)(SPI_HandleTypeDef *hspi);   // define function pointer for interrupt handlers
+
+// entry definition for interrupt lookup table
+struct mcp2515_irq_entry {
+    u8 flag;
+    mcp2515_irq_handler_t handler;
+};
+
+// Mappings
+extern const char *opmode_strings[];			// Operation mode string lookup table
+extern struct mcp2515_irq_entry irq_table[];	// Interrupt handler lookup table
+extern const size_t IRQ_TABLE_SIZE;
 
 // Function Declarations
 HAL_StatusTypeDef mcp2515_write_reg(SPI_HandleTypeDef *hspi, u8 reg, u8 value);
@@ -345,9 +355,13 @@ HAL_StatusTypeDef mcp2515_set_tx2_sid(SPI_HandleTypeDef *hspi, u16 id);         
 HAL_StatusTypeDef mcp2515_set_tx2_data(SPI_HandleTypeDef *hspi, const u8 *data, u8 len);                // Set the message data for the transmit buffer 2
 HAL_StatusTypeDef mcp2515_write_can_frame(SPI_HandleTypeDef *hspi, u16 id, const u8 *data, u8 len);     // Transmit the CAN messsage over the transmit buffer 2
 
-int mcp2515_handle_merrf(SPI_HandleTypeDef *hspi);
-int mcp2515_handle_errif(SPI_HandleTypeDef *hspi);
-int mcp2515_handle_tx2if(SPI_HandleTypeDef *hspi);
+HAL_StatusTypeDef mcp2515_handle_merrf(SPI_HandleTypeDef *hspi);
+HAL_StatusTypeDef mcp2515_handle_errif(SPI_HandleTypeDef *hspi);
+HAL_StatusTypeDef mcp2515_handle_tx2if(SPI_HandleTypeDef *hspi);
+HAL_StatusTypeDef mcp2515_handle_rx1if(SPI_HandleTypeDef *hspi);
+HAL_StatusTypeDef mcp2515_handle_rx0if(SPI_HandleTypeDef *hspi);
+u8 is_tx2_buf_ready();
+
 
 size_t get_opmode_strings_len(void);
 const char* get_opmode_string(u8 mode);

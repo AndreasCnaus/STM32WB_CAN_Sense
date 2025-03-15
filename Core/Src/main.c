@@ -53,7 +53,7 @@ SPI_HandleTypeDef hspi1;
 TIM_HandleTypeDef htim16;
 
 /* USER CODE BEGIN PV */
-volatile uint8_t tim16_flag = 0; // prevent compiler optimization
+volatile uint8_t tim16_flag = 0; // Timer flag to signal time events; declared volatile to prevent compiler optimization.
 BME280 bme280;					 // BME280 instance
 
 /* USER CODE END PV */
@@ -114,58 +114,81 @@ int main(void)
   /* USER CODE BEGIN 2 */
   BME280_cmd_res cmd_res = BME280_init(&bme280, &hi2c1);
   if (cmd_res != BME280_CMD_OK) {
+	  LOG_ERROR("Failed to initialize BME280 hardware (status: %d)", cmd_res);
 	  HAL_GPIO_WritePin(GPIOA, GPIO_PIN_10, GPIO_PIN_SET);	// indicate error with LED on PA10
   }
 
-  // start the timer
-  // HAL_TIM_Base_Start_IT(&htim16);
-
   // Configure the MCP2515 hardware
   u8 opmode = 0x00;
-  mcp2515_reset_hw(&hspi1);
-  mcp2515_config_hw(&hspi1);
-  mcp2515_set_opmode(&hspi1, MCP2515_LOOPBACK_MODE);
-  mcp2515_get_opmode(&hspi1, &opmode);
+  HAL_StatusTypeDef status = HAL_OK;
+
+  status = mcp2515_reset_hw(&hspi1);
+  if (status != HAL_OK) {
+	  LOG_ERROR("Failed to reset MCP2515 hardware (status: %d)", status);
+	  HAL_GPIO_WritePin(GPIOA, GPIO_PIN_10, GPIO_PIN_SET);	// indicate error with LED on PA10
+  }
+
+  status = mcp2515_config_hw(&hspi1);
+  if (status != HAL_OK) {
+	  LOG_ERROR("Failed to configure MCP2515 hardware (status: %d)", status);
+	  HAL_GPIO_WritePin(GPIOA, GPIO_PIN_10, GPIO_PIN_SET);	// indicate error with LED on PA10
+  }
+
+  status = mcp2515_set_opmode(&hspi1, MCP2515_LOOPBACK_MODE);
+  if (status != HAL_OK) {
+	  LOG_ERROR("Failed to set MCP2515 into loop-back operation mode (status: %d)", status);
+	  HAL_GPIO_WritePin(GPIOA, GPIO_PIN_10, GPIO_PIN_SET);	// indicate error with LED on PA10
+  }
+
+  status = mcp2515_get_opmode(&hspi1, &opmode);
+  if (status != HAL_OK) {
+	  LOG_ERROR("Failed to read current MCP2515 operation mode (status: %d)", status);
+	  HAL_GPIO_WritePin(GPIOA, GPIO_PIN_10, GPIO_PIN_SET);	// indicate error with LED on PA10
+  }
   LOG_INFO("Device is in %s", get_opmode_string(opmode));
 
-  // Create and send test message
-  u16 msg_sid = 25;
-  char msg[] = "Test1";
-  u8 msg_len = (u8)strlen(msg);
-  mcp2515_write_can_frame(&hspi1, msg_sid,(u8 *)msg, msg_len);
-
+  // Start the timer16
+  HAL_TIM_Base_Start_IT(&htim16);
 
   /* USER CODE END 2 */
 
   /* Infinite loop */
   /* USER CODE BEGIN WHILE */
-  uint8_t str[30];	// message buffer
+
+  // Create test message1
+  u16 msg_sid = 25;
+  char msg[] = "Test1";
+  u8 msg_len = (u8)strlen(msg);
 
   while (1)
   {
 	  if (tim16_flag){
-		  __disable_irq();
+		  // Disable the update interrupt for TIM16
+		  __HAL_TIM_DISABLE_IT(&htim16, TIM_IT_UPDATE);
 
-		  // read environmental (temperature, humidity, pressure) data from the sensor
+		  // Read environmental (temperature, humidity, pressure) data from the sensor
 		  BME280_cmd_res cmd_res = BME280_read_env_data(&bme280);
 		  if (cmd_res != BME280_CMD_OK) {
-			  HAL_GPIO_WritePin(GPIOA, GPIO_PIN_10, GPIO_PIN_SET);	// indicate error with LED on PA10
+			  HAL_GPIO_WritePin(GPIOA, GPIO_PIN_10, GPIO_PIN_SET);	// Indicate error with LED on PA10
 		  }
 
-		  // convert data into the appropriate units
-		  float temp_deg = (float)bme280.T / 100.0f;
+		  // Convert data into the appropriate units
+		  // float temp_deg = (float)bme280.T / 100.0f;
 		  //BME280_U32_t hum_prh = (float)bme280.H/kH * 100.0f;	// relative humidity in Percent
 		  //BME280_U32_t pres_pa=  bme280.P/kP * 10;	//in Pascal
 
-		  // create message string from the environmental data
-		  printf("Temperatur: %.2f °C\n\r", temp_deg);
+		  if (is_tx2_buf_ready(&hspi1)) {
+			  status = mcp2515_write_can_frame(&hspi1, msg_sid,(u8 *)msg, msg_len);
+			  if (status != HAL_OK) {
+			 	  LOG_ERROR("Failed to write CAN frame (status: %d)", status);
+			 	  HAL_GPIO_WritePin(GPIOA, GPIO_PIN_10, GPIO_PIN_SET);	// Indicate error with LED on PA10
+			  }
+		  }
 
-		  // send data over USB Virtual COM Port
-		  CDC_Transmit_FS(str, strlen((char *)str));
+		  tim16_flag = 0;	// Reset the timer flag
 
-		  tim16_flag = 0;	// reset the timer flag
-
-		  __enable_irq();
+		  // Re-enable the update interrupt for TIM16
+		  __HAL_TIM_ENABLE_IT(&htim16, TIM_IT_UPDATE);
 	  }
     /* USER CODE END WHILE */
 
@@ -429,12 +452,32 @@ void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim)
 
 void HAL_GPIO_EXTI_Callback(uint16_t GPIO_Pin)
 {
-    if (GPIO_Pin == MCP2515_INT_Pin) {
-        // Handle the interrupt for MCP2515_INT_Pin
-        // Example: Notify a task, set a flag, or process data
-        LOG_INFO("MCP2515 interrupt triggered!");
-    }
+	if (GPIO_Pin == MCP2515_INT_Pin) {
+
+		HAL_StatusTypeDef status = HAL_OK;
+		u8 canintf = 0x00;
+
+		// Read MCP2515 interrupt flag register
+		status = mcp2515_read_reg(&hspi1, MCP2515_CANINTF, &canintf);
+		if (status != HAL_OK) {
+			LOG_ERROR("Failed to read interrupt flag register (status: %d)", status);
+			HAL_GPIO_WritePin(GPIOA, GPIO_PIN_10, GPIO_PIN_SET);	// Indicate error with LED on PA10
+			return;
+		}
+
+		// Process the interrupts
+		for (int i = 0; i < IRQ_TABLE_SIZE; i++) {
+			if (canintf & irq_table[i].flag) {
+				status = irq_table[i].handler(&hspi1);
+				if (status != HAL_OK) {
+					LOG_ERROR("Failed to handle interrupt (flag: 0x%X, index: %d, status: %d)", irq_table[i].flag, i, status);
+					HAL_GPIO_WritePin(GPIOA, GPIO_PIN_10, GPIO_PIN_SET);	// Indicate error with LED on PA10
+				}
+			}
+		}
+	}
 }
+
 
 // Redirect printf to ITM (Instrumentation Trace Macrocell)
 int __io_putchar(int ch) {
