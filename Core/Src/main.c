@@ -28,15 +28,31 @@
 #include <bme280.h>
 #include <mcp2515.h>
 
+
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
 /* USER CODE BEGIN PTD */
+struct can_frame_data {
+    uint16_t sid;                   // Standard identifier
+    uint8_t dlc;                    // Data length code
+    uint8_t data[MCP2515_MAXDL];    // Data buffer
+};
+
+// Structure for SID_String mapping
+struct sid_string_mapping {
+	uint16_t sid;		// Standard identifier of the CAN Message
+	const char *name;	// Corresponding string
+};
 
 /* USER CODE END PTD */
 
 /* Private define ------------------------------------------------------------*/
 /* USER CODE BEGIN PD */
+// SIDs for BME280 sensor values transmitted via MCP2515
+#define BME280_TEMPERATURE_SID    25
+#define BME280_PRESSURE_SID       26
+#define BME280_HUMIDITY_SID       27
 
 /* USER CODE END PD */
 
@@ -56,6 +72,13 @@ TIM_HandleTypeDef htim16;
 volatile uint8_t tim16_flag = 0; // Timer flag to signal time events; declared volatile to prevent compiler optimization.
 BME280 bme280;					 // BME280 instance
 
+// SID Mappings
+const struct sid_string_mapping sid_map[] = {
+    {BME280_TEMPERATURE_SID, "Temperature"},
+    {BME280_PRESSURE_SID, "Pressure"},
+    {BME280_HUMIDITY_SID, "Humidity"}
+};
+
 /* USER CODE END PV */
 
 /* Private function prototypes -----------------------------------------------*/
@@ -67,6 +90,8 @@ static void MX_SPI1_Init(void);
 static void MX_TIM16_Init(void);
 /* USER CODE BEGIN PFP */
 int __io_putchar(int ch);	// Redirect printf to ITM (Instrumentation Trace Macrocell)
+struct can_frame_data create_can_frame(uint16_t sid, void *data, uint8_t dlc);
+uint8_t wait_for_tx2_buffer(uint8_t retries, uint16_t delay_ms);
 
 /* USER CODE END PFP */
 
@@ -115,7 +140,7 @@ int main(void)
   BME280_cmd_res cmd_res = BME280_init(&bme280, &hi2c1);
   if (cmd_res != BME280_CMD_OK) {
 	  LOG_ERROR("Failed to initialize BME280 hardware (status: %d)", cmd_res);
-	  HAL_GPIO_WritePin(GPIOA, GPIO_PIN_10, GPIO_PIN_SET);	// indicate error with LED on PA10
+	  HAL_GPIO_WritePin(GPIOA, GPIO_PIN_10, GPIO_PIN_SET);	// indicate error with blue LED on PA10
   }
 
   // Configure the MCP2515 hardware
@@ -125,25 +150,25 @@ int main(void)
   status = mcp2515_reset_hw(&hspi1);
   if (status != HAL_OK) {
 	  LOG_ERROR("Failed to reset MCP2515 hardware (status: %d)", status);
-	  HAL_GPIO_WritePin(GPIOA, GPIO_PIN_10, GPIO_PIN_SET);	// indicate error with LED on PA10
+	  HAL_GPIO_WritePin(GPIOA, GPIO_PIN_10, GPIO_PIN_SET);	// indicate error with blue LED on PA10
   }
 
   status = mcp2515_config_hw(&hspi1);
   if (status != HAL_OK) {
 	  LOG_ERROR("Failed to configure MCP2515 hardware (status: %d)", status);
-	  HAL_GPIO_WritePin(GPIOA, GPIO_PIN_10, GPIO_PIN_SET);	// indicate error with LED on PA10
+	  HAL_GPIO_WritePin(GPIOA, GPIO_PIN_10, GPIO_PIN_SET);	// indicate error with blue LED on PA10
   }
 
   status = mcp2515_set_opmode(&hspi1, MCP2515_LOOPBACK_MODE);
   if (status != HAL_OK) {
 	  LOG_ERROR("Failed to set MCP2515 into loop-back operation mode (status: %d)", status);
-	  HAL_GPIO_WritePin(GPIOA, GPIO_PIN_10, GPIO_PIN_SET);	// indicate error with LED on PA10
+	  HAL_GPIO_WritePin(GPIOA, GPIO_PIN_10, GPIO_PIN_SET);	// indicate error with blue LED on PA10
   }
 
   status = mcp2515_get_opmode(&hspi1, &opmode);
   if (status != HAL_OK) {
 	  LOG_ERROR("Failed to read current MCP2515 operation mode (status: %d)", status);
-	  HAL_GPIO_WritePin(GPIOA, GPIO_PIN_10, GPIO_PIN_SET);	// indicate error with LED on PA10
+	  HAL_GPIO_WritePin(GPIOA, GPIO_PIN_10, GPIO_PIN_SET);	// indicate error with blue LED on PA10
   }
   LOG_INFO("Device is in %s", get_opmode_string(opmode));
 
@@ -154,42 +179,62 @@ int main(void)
 
   /* Infinite loop */
   /* USER CODE BEGIN WHILE */
-
-  // Create test message1
-  u16 msg_sid = 25;
-  char msg[] = "Test1";
-  u8 msg_len = (u8)strlen(msg);
-
+  struct can_frame_data can_frames[3];
   while (1)
   {
-	  if (tim16_flag){
+	  if (tim16_flag) {
 		  // Disable the update interrupt for TIM16
 		  __HAL_TIM_DISABLE_IT(&htim16, TIM_IT_UPDATE);
 
 		  // Read environmental (temperature, humidity, pressure) data from the sensor
 		  BME280_cmd_res cmd_res = BME280_read_env_data(&bme280);
 		  if (cmd_res != BME280_CMD_OK) {
-			  HAL_GPIO_WritePin(GPIOA, GPIO_PIN_10, GPIO_PIN_SET);	// Indicate error with LED on PA10
+			  HAL_GPIO_WritePin(GPIOA, GPIO_PIN_10, GPIO_PIN_SET); // Indicate error with blue LED on PA10
 		  }
 
 		  // Convert data into the appropriate units
-		  // float temp_deg = (float)bme280.T / 100.0f;
-		  //BME280_U32_t hum_prh = (float)bme280.H/kH * 100.0f;	// relative humidity in Percent
-		  //BME280_U32_t pres_pa=  bme280.P/kP * 10;	//in Pascal
+		  BME280_S32_t temp_deg = bme280.T / kT;
+		  BME280_U32_t hum_prh = bme280.H / kH;    // Relative humidity in Percent
+		  BME280_U32_t pres_pa = bme280.P / kP;   // Pressure in Pascal
 
-		  if (is_tx2_buf_ready(&hspi1)) {
-			  status = mcp2515_write_can_frame(&hspi1, msg_sid,(u8 *)msg, msg_len);
-			  if (status != HAL_OK) {
-			 	  LOG_ERROR("Failed to write CAN frame (status: %d)", status);
-			 	  HAL_GPIO_WritePin(GPIOA, GPIO_PIN_10, GPIO_PIN_SET);	// Indicate error with LED on PA10
+		  // Log the values
+		  LOG_INFO("Temperature: %ld °C", (long)temp_deg);
+		  LOG_INFO("Humidity: %lu %%", (unsigned long)hum_prh);
+		  LOG_INFO("Pressure: %lu Pa", (unsigned long)pres_pa);
+
+		  // Create CAN frame
+		  can_frames[0] = create_can_frame(BME280_TEMPERATURE_SID, &temp_deg, sizeof(temp_deg));
+		  can_frames[1] = create_can_frame(BME280_HUMIDITY_SID, &hum_prh, sizeof(hum_prh));
+		  can_frames[2] = create_can_frame(BME280_PRESSURE_SID, &pres_pa, sizeof(pres_pa));
+
+		  // Send CAN fames
+		  for (int i = 0; i < sizeof(can_frames)/sizeof(can_frames[0]); i++) {
+			  uint8_t retries = 3;
+			  uint16_t delay_ms = 10;
+			  struct can_frame_data frame = can_frames[i];
+
+			  // Wait until the TX buffer is ready to accept new data
+			  if (!wait_for_tx2_buffer(retries, delay_ms)) {
+			      LOG_ERROR("TX buffer 2 not ready after %d retries, frame: %s skipped", retries, sid_map[frame.sid]);
+			      HAL_GPIO_WritePin(GPIOA, GPIO_PIN_10, GPIO_PIN_SET); // Indicate error with blue LED on PA10
+			      continue; // Skip the current frame
 			  }
+
+			  // Send the CAN frame
+			  status = mcp2515_write_can_frame(&hspi1, frame.sid, frame.data, frame.dlc);
+			  if (status != HAL_OK) {
+				  LOG_ERROR("Failed to write %s CAN frame (status: %d)", sid_map[frame.sid], status);
+				  HAL_GPIO_WritePin(GPIOA, GPIO_PIN_10, GPIO_PIN_SET); // Indicate error with blue LED on PA10
+			  }
+
 		  }
 
-		  tim16_flag = 0;	// Reset the timer flag
+		  tim16_flag = 0; // Reset the timer flag
 
 		  // Re-enable the update interrupt for TIM16
 		  __HAL_TIM_ENABLE_IT(&htim16, TIM_IT_UPDATE);
-	  }
+		}
+
     /* USER CODE END WHILE */
 
     /* USER CODE BEGIN 3 */
@@ -478,11 +523,36 @@ void HAL_GPIO_EXTI_Callback(uint16_t GPIO_Pin)
 	}
 }
 
-
 // Redirect printf to ITM (Instrumentation Trace Macrocell)
 int __io_putchar(int ch) {
     ITM_SendChar(ch); // Send character to SWO
     return ch;
+}
+
+struct can_frame_data create_can_frame(uint16_t sid, void *data,  uint8_t dlc)
+{
+	 if (dlc > MCP2515_MAXDL) {
+		 dlc = MCP2515_MAXDL; // Cap the length to avoid buffer overflows
+	 }
+
+	 struct can_frame_data frame;
+	 frame.sid = sid;
+	 frame.dlc = dlc;
+	 memcpy(frame.data, (uint8_t *)data, frame.dlc);
+
+	 return frame;
+}
+
+uint8_t wait_for_tx2_buffer(uint8_t retries, uint16_t delay_ms)
+{
+	while (retries-- > 0) {
+		if (is_tx2_buf_ready()) {
+			return 1;	 // TX buffer 2 is ready
+		}
+		HAL_Delay(delay_ms);	// Wait for buffer
+	}
+
+	return 0;	// // TX buffer 2 not ready after retries
 }
 
 /* USER CODE END 4 */
