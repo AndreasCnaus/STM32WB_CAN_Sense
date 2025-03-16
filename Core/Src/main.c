@@ -180,7 +180,7 @@ int main(void)
   /* Infinite loop */
   /* USER CODE BEGIN WHILE */
   struct can_frame_data can_frames[3];
-  while (1)
+  while (status == HAL_OK)
   {
 	  if (tim16_flag) {
 		  // Disable the update interrupt for TIM16
@@ -193,12 +193,12 @@ int main(void)
 		  }
 
 		  // Convert data into the appropriate units
-		  BME280_S32_t temp_deg = bme280.T / kT;
+		  BME280_S32_t temp_deg = bme280.T / kT;  // Temperatur in Degree Scaled by 10
 		  BME280_U32_t hum_prh = bme280.H / kH;    // Relative humidity in Percent
 		  BME280_U32_t pres_pa = bme280.P / kP;   // Pressure in Pascal
 
 		  // Log the values
-		  LOG_INFO("Temperature: %ld °C", (long)temp_deg);
+		  LOG_INFO("Temperature: %ld °C", (signed long)temp_deg);
 		  LOG_INFO("Humidity: %lu %%", (unsigned long)hum_prh);
 		  LOG_INFO("Pressure: %lu Pa", (unsigned long)pres_pa);
 
@@ -215,7 +215,7 @@ int main(void)
 
 			  // Wait until the TX buffer is ready to accept new data
 			  if (!wait_for_tx2_buffer(retries, delay_ms)) {
-			      LOG_ERROR("TX buffer 2 not ready after %d retries, frame: %s skipped", retries, sid_map[frame.sid]);
+				  LOG_ERROR("Transmission buffer 2 not ready after %d retries", retries);
 			      HAL_GPIO_WritePin(GPIOA, GPIO_PIN_10, GPIO_PIN_SET); // Indicate error with blue LED on PA10
 			      continue; // Skip the current frame
 			  }
@@ -395,7 +395,7 @@ static void MX_SPI1_Init(void)
   hspi1.Init.CLKPolarity = SPI_POLARITY_LOW;
   hspi1.Init.CLKPhase = SPI_PHASE_1EDGE;
   hspi1.Init.NSS = SPI_NSS_SOFT;
-  hspi1.Init.BaudRatePrescaler = SPI_BAUDRATEPRESCALER_8;
+  hspi1.Init.BaudRatePrescaler = SPI_BAUDRATEPRESCALER_256;
   hspi1.Init.FirstBit = SPI_FIRSTBIT_MSB;
   hspi1.Init.TIMode = SPI_TIMODE_DISABLE;
   hspi1.Init.CRCCalculation = SPI_CRCCALCULATION_DISABLE;
