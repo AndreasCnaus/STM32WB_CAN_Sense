@@ -135,16 +135,18 @@ HAL_StatusTypeDef mcp2515_set_opmode(SPI_HandleTypeDef *hspi, u8 mode)
     u8 des_opmode = ((mode << MCP2515_OPMOD_O) & MCP2515_OPMOD_M);  // Align mode to REQOP[2:0]
 
     // Read the CANCTRL register
-    u8 canctl = 0x00;
-    status = mcp2515_read_reg(hspi, MCP2515_CANCTRL, &canctl);
+    u8 canctrl = 0x00;
+    status = mcp2515_read_reg(hspi, MCP2515_CANCTRL, &canctrl);
     if (status != HAL_OK) {
         LOG_ERROR("Failed to read CANCTRL register (status %d)", status);
         return status;
     }
 
     // Clear REQOP bits and set the desired operation mode
-    canctl = ((canctl & ~MCP2515_OPMOD_M) | des_opmode);
-    status = mcp2515_write_reg(hspi, MCP2515_CANCTRL, canctl);
+    canctrl = ((canctrl & ~MCP2515_OPMOD_M) | des_opmode);
+    // Set One-Shot Mode bit
+    canctrl = (canctrl | MCP2515_OSM);
+    status = mcp2515_write_reg(hspi, MCP2515_CANCTRL, canctrl);
     if (status != HAL_OK) {
         LOG_ERROR("Failed to write CANCTRL register with status %d", status);
         return status;
@@ -260,7 +262,7 @@ HAL_StatusTypeDef mcp2515_config_hw(SPI_HandleTypeDef *hspi)
 
     // Bit-timing and baud rate parameters
     u8 sjw = 1;          // Synchronization jump width
-    u8 bpr = 2;          // Baud rate prescaler to divide the oscillator frequency
+    u8 brp = 2;          // Baud rate prescaler to divide the oscillator frequency
     u8 btlmode = 1;      // Length of PS2 determined by PHSEG2 bits of CNF3
     u8 sam = 1;          // Bus line sampled three times at the sample point
     u8 ps1 = 7;          // Phase segment 1 time in time quanta (TQ)
@@ -271,18 +273,11 @@ HAL_StatusTypeDef mcp2515_config_hw(SPI_HandleTypeDef *hspi)
     u8 nofTq = 0;            // Number of time quanta (will be calculated)
     u32 baudrate = 0;        // Baud rate (will be calculated)
 
-    // Set CAN-Control register to 0x00 (reset state)
-    status = mcp2515_write_reg(hspi, MCP2515_CANCTRL, 0x00);
-    if (status != HAL_OK) {
-        LOG_ERROR("Failed to initialize CAN-Control register (status: %d)", status);
-        return status;
-    }
-
     // Configure bit-timing and baud rate settings (CNF1, CNF2, CNF3)
-    cnf1 |= (sjw << MCP2515_SJW_O) | bpr;  // Set synchronization jump width and prescaler
+    cnf1 |= ((( (sjw - 1) << MCP2515_SJW_O) & MCP2515_SJW_M) | ((brp - 1) & MCP2515_BRP_M));
     cnf2 |= (btlmode << MCP2515_BTLMODE_O) | (sam << MCP2515_SAM_O) |
-            (ps1 << MCP2515_PHSEG1_O) | (tprop_seg << MCP2515_PRSEG_O);  // Configure sample point and PS1
-    cnf3 |= ps2;  // Set phase segment 2 timing
+            ((ps1 - 1) << MCP2515_PHSEG1_O) | ((tprop_seg - 1) << MCP2515_PRSEG_O);  // Configure sample point and PS1
+    cnf3 |= (ps2 - 1);  // Set phase segment 2 timing
 
     // Write configuration to MCP2515 registers
     status = mcp2515_write_reg(hspi, MCP2515_CNF1, cnf1);
@@ -303,11 +298,11 @@ HAL_StatusTypeDef mcp2515_config_hw(SPI_HandleTypeDef *hspi)
 
     // Calculate and log baud rate (for debugging purposes)
     nofTq = tsync + tprop_seg + ps1 + ps2;
-    baudrate = osc_freq / (2 * bpr * nofTq);
+    baudrate = osc_freq / (2 * brp * nofTq);
     LOG_INFO("Calculated baud rate: %d bps", baudrate);
 
     // Enable interrupts via CANINTE register
-    caninte = 0xB0;  // Enable (Message error, Error,  Transmit buffer 2 empty) interrupt flags
+    caninte = 0xFF;  // Enable all interrupt flags
     status = mcp2515_write_reg(hspi, MCP2515_CANINTE, caninte);
     if (status != HAL_OK) {
         LOG_ERROR("Failed to set interrupt enable register (status: %d)", status);
@@ -477,8 +472,13 @@ HAL_StatusTypeDef mcp2515_handle_merrf(SPI_HandleTypeDef *hspi)
 HAL_StatusTypeDef mcp2515_handle_errif(SPI_HandleTypeDef *hspi)
 {
     HAL_StatusTypeDef status = HAL_OK;
+    u8 eflg = 0x00;		// Error Flag Register value
 
     LOG_WARN("Error interrupt occurred");
+
+    // Read Error Flag Register
+    mcp2515_read_reg(hspi, MCP2515_EFLG, &eflg);
+    LOG_INFO("Error Flag Register (EFLG) value: %u", eflg);
 
     // Clear the ERRIF flag in the CANINTF register
     status = mcp2515_write_bit(hspi, MCP2515_CANINTF, MCP2515_ERRIF, 0x0);

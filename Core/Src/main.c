@@ -51,8 +51,9 @@ struct sid_string_mapping {
 /* USER CODE BEGIN PD */
 // SIDs for BME280 sensor values transmitted via MCP2515
 #define BME280_TEMPERATURE_SID    25
-#define BME280_PRESSURE_SID       26
-#define BME280_HUMIDITY_SID       27
+#define BME280_HUMIDITY_SID       26
+#define BME280_PRESSURE_SID       27
+
 
 /* USER CODE END PD */
 
@@ -137,40 +138,55 @@ int main(void)
   MX_TIM16_Init();
   MX_USB_Device_Init();
   /* USER CODE BEGIN 2 */
+  uint8_t error_count = 0;
+  u8 opmode = 0x00;
+  HAL_StatusTypeDef status = HAL_OK;
+
+  // Configure the BME280 Sensor chip
   BME280_cmd_res cmd_res = BME280_init(&bme280, &hi2c1);
   if (cmd_res != BME280_CMD_OK) {
 	  LOG_ERROR("Failed to initialize BME280 hardware (status: %d)", cmd_res);
 	  HAL_GPIO_WritePin(GPIOA, GPIO_PIN_10, GPIO_PIN_SET);	// indicate error with blue LED on PA10
+	  error_count++;
   }
 
-  // Configure the MCP2515 hardware
-  u8 opmode = 0x00;
-  HAL_StatusTypeDef status = HAL_OK;
+  // Disable external interrupt line (EXTI3) connected to MCP2515 CAN controller
+  HAL_NVIC_DisableIRQ(EXTI3_IRQn);
 
+  // Configure the MCP2515 hardware
   status = mcp2515_reset_hw(&hspi1);
   if (status != HAL_OK) {
 	  LOG_ERROR("Failed to reset MCP2515 hardware (status: %d)", status);
 	  HAL_GPIO_WritePin(GPIOA, GPIO_PIN_10, GPIO_PIN_SET);	// indicate error with blue LED on PA10
+	  error_count++;
   }
 
   status = mcp2515_config_hw(&hspi1);
   if (status != HAL_OK) {
 	  LOG_ERROR("Failed to configure MCP2515 hardware (status: %d)", status);
 	  HAL_GPIO_WritePin(GPIOA, GPIO_PIN_10, GPIO_PIN_SET);	// indicate error with blue LED on PA10
+	  error_count++;
   }
 
-  status = mcp2515_set_opmode(&hspi1, MCP2515_LOOPBACK_MODE);
+  status = mcp2515_set_opmode(&hspi1, MCP2515_NORMAL_MODE);
   if (status != HAL_OK) {
 	  LOG_ERROR("Failed to set MCP2515 into loop-back operation mode (status: %d)", status);
 	  HAL_GPIO_WritePin(GPIOA, GPIO_PIN_10, GPIO_PIN_SET);	// indicate error with blue LED on PA10
+	  error_count++;
   }
 
   status = mcp2515_get_opmode(&hspi1, &opmode);
   if (status != HAL_OK) {
 	  LOG_ERROR("Failed to read current MCP2515 operation mode (status: %d)", status);
 	  HAL_GPIO_WritePin(GPIOA, GPIO_PIN_10, GPIO_PIN_SET);	// indicate error with blue LED on PA10
+	  error_count++;
   }
-  LOG_INFO("Device is in %s", get_opmode_string(opmode));
+  else {
+	  LOG_INFO("Device is in %s", get_opmode_string(opmode));
+  }
+
+  // Enable external interrupt line (EXTI3) connected to MCP2515 CAN controller
+  HAL_NVIC_EnableIRQ(EXTI3_IRQn);
 
   // Start the timer16
   HAL_TIM_Base_Start_IT(&htim16);
@@ -180,7 +196,8 @@ int main(void)
   /* Infinite loop */
   /* USER CODE BEGIN WHILE */
   struct can_frame_data can_frames[3];
-  while (status == HAL_OK)
+
+  while ((status == HAL_OK) && (error_count == 0))
   {
 	  if (tim16_flag) {
 		  // Disable the update interrupt for TIM16
@@ -190,17 +207,18 @@ int main(void)
 		  BME280_cmd_res cmd_res = BME280_read_env_data(&bme280);
 		  if (cmd_res != BME280_CMD_OK) {
 			  HAL_GPIO_WritePin(GPIOA, GPIO_PIN_10, GPIO_PIN_SET); // Indicate error with blue LED on PA10
+			  error_count++;
 		  }
 
-		  // Convert data into the appropriate units
-		  BME280_S32_t temp_deg = bme280.T / kT;  // Temperatur in Degree Scaled by 10
-		  BME280_U32_t hum_prh = bme280.H / kH;    // Relative humidity in Percent
-		  BME280_U32_t pres_pa = bme280.P / kP;   // Pressure in Pascal
+		  // Convert integer values to float
+		  float temp_deg = (float)bme280.T / (float)kT;  // Temperature in degrees
+		  float hum_prh = (float)bme280.H / (float)kH;   // Relative Humidity in percent
+		  float pres_pa = (float)bme280.P / (float)kP;  // Pressure in pascals
 
 		  // Log the values
-		  LOG_INFO("Temperature: %ld °C", (signed long)temp_deg);
-		  LOG_INFO("Humidity: %lu %%", (unsigned long)hum_prh);
-		  LOG_INFO("Pressure: %lu Pa", (unsigned long)pres_pa);
+		  LOG_INFO("Temperature: %.1f °C", temp_deg);  // One decimal precision
+		  LOG_INFO("Humidity: %.1f %%", hum_prh);      // One decimal precision
+		  LOG_INFO("Pressure: %.1f Pa", pres_pa);     // One decimal precision
 
 		  // Create CAN frame
 		  can_frames[0] = create_can_frame(BME280_TEMPERATURE_SID, &temp_deg, sizeof(temp_deg));
@@ -217,6 +235,7 @@ int main(void)
 			  if (!wait_for_tx2_buffer(retries, delay_ms)) {
 				  LOG_ERROR("Transmission buffer 2 not ready after %d retries", retries);
 			      HAL_GPIO_WritePin(GPIOA, GPIO_PIN_10, GPIO_PIN_SET); // Indicate error with blue LED on PA10
+			      error_count++;
 			      continue; // Skip the current frame
 			  }
 
@@ -225,8 +244,8 @@ int main(void)
 			  if (status != HAL_OK) {
 				  LOG_ERROR("Failed to write %s CAN frame (status: %d)", sid_map[frame.sid], status);
 				  HAL_GPIO_WritePin(GPIOA, GPIO_PIN_10, GPIO_PIN_SET); // Indicate error with blue LED on PA10
+				  error_count++;
 			  }
-
 		  }
 
 		  tim16_flag = 0; // Reset the timer flag
@@ -239,6 +258,8 @@ int main(void)
 
     /* USER CODE BEGIN 3 */
   }
+  LOG_ERROR("Error count: %u", error_count);
+  LOG_ERROR("Exiting...");
   /* USER CODE END 3 */
 }
 
@@ -395,7 +416,7 @@ static void MX_SPI1_Init(void)
   hspi1.Init.CLKPolarity = SPI_POLARITY_LOW;
   hspi1.Init.CLKPhase = SPI_PHASE_1EDGE;
   hspi1.Init.NSS = SPI_NSS_SOFT;
-  hspi1.Init.BaudRatePrescaler = SPI_BAUDRATEPRESCALER_256;
+  hspi1.Init.BaudRatePrescaler = SPI_BAUDRATEPRESCALER_8;
   hspi1.Init.FirstBit = SPI_FIRSTBIT_MSB;
   hspi1.Init.TIMode = SPI_TIMODE_DISABLE;
   hspi1.Init.CRCCalculation = SPI_CRCCALCULATION_DISABLE;
