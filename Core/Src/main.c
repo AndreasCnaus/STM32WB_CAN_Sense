@@ -54,7 +54,6 @@ struct sid_string_mapping {
 #define BME280_HUMIDITY_SID       26
 #define BME280_PRESSURE_SID       27
 
-
 /* USER CODE END PD */
 
 /* Private macro -------------------------------------------------------------*/
@@ -93,6 +92,7 @@ static void MX_TIM16_Init(void);
 int __io_putchar(int ch);	// Redirect printf to ITM (Instrumentation Trace Macrocell)
 struct can_frame_data create_can_frame(uint16_t sid, void *data, uint8_t dlc);
 uint8_t wait_for_tx2_buffer(uint8_t retries, uint16_t delay_ms);
+uint32_t get_timestamp_milliseconds();
 
 /* USER CODE END PFP */
 
@@ -200,6 +200,10 @@ int main(void)
   while ((status == HAL_OK) && (error_count == 0))
   {
 	  if (tim16_flag) {
+
+		  //uint32_t timestamp = get_timestamp_milliseconds();
+		  //LOG_INFO("Timestamp: %lu ms", timestamp);
+
 		  // Disable the update interrupt for TIM16
 		  __HAL_TIM_DISABLE_IT(&htim16, TIM_IT_UPDATE);
 
@@ -449,9 +453,9 @@ static void MX_TIM16_Init(void)
 
   /* USER CODE END TIM16_Init 1 */
   htim16.Instance = TIM16;
-  htim16.Init.Prescaler = 512;
+  htim16.Init.Prescaler = 1024-1;
   htim16.Init.CounterMode = TIM_COUNTERMODE_UP;
-  htim16.Init.Period = 62500;
+  htim16.Init.Period = 62500-1;
   htim16.Init.ClockDivision = TIM_CLOCKDIVISION_DIV1;
   htim16.Init.RepetitionCounter = 0;
   htim16.Init.AutoReloadPreload = TIM_AUTORELOAD_PRELOAD_ENABLE;
@@ -575,6 +579,14 @@ uint8_t wait_for_tx2_buffer(uint8_t retries, uint16_t delay_ms)
 
 	return 0;	// // TX buffer 2 not ready after retries
 }
+
+
+uint32_t get_timestamp_milliseconds() {
+    // Use HAL_GetTick() to get the system uptime in milliseconds
+    uint32_t milliseconds = HAL_GetTick();
+    return milliseconds;
+}
+
 
 /* USER CODE END 4 */
 
