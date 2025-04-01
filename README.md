@@ -1,5 +1,8 @@
-# STM32WB_CAN_Sense Project
-**Work in progress**
+# STM32WB_CAN_Sense
+
+This project includes custom drivers for the BME280 sensor as well as the driver for the MCP2515 CAN chip. The driver for the CAN chip was reduced to the essentials for sending the CAN messages and for testing them in loopback mode during development. The environmental measurements ​​(temperature, humidity, and air pressure) from the BME280 sensor are read at one-second intervals using a timer and placed on the bus as separate CAN messages. The data flow is controlled by two flags (Timer and Tx-Buffer-Ready) to keep the entire process as simple as possible. As soon as the timer triggers, a timer flag is set there. The readiness of the transmit buffer in the MCP2515 is handled in a similar way. Both flags are constantly queried in the main loop, and if the conditions are met, new values ​​are read and sent. Moreover a simple error handling mechanism has also been implemented. In the event of an error, the corresponding error is logged using a simple logger (is visible in the debug output), and a blue LED on the board is also activated. The pinout for the STM32WB55 microcontroller is as shown in the image below.
+
+![STM32WB55_Pinout_Overview](/docs/STM32WB55_CAN_Sense_Pinout_View.png)
 
 ## License
 
